@@ -6,9 +6,13 @@
 
 using namespace std;
 
-// 工具函数：检查 ID 向量是否为升序
-bool is_sorted_ids(const vector<int>& ids) {
-    return std::is_sorted(ids.begin(), ids.end());
+// 辅助函数：将遍历得到的 Node* 向量转换为 ufid 向量，方便进行全序列对比
+vector<int> get_ids(const vector<Node*>& nodes) {
+    vector<int> ids;
+    for (auto n : nodes) {
+        if (n) ids.push_back(n->ufid);
+    }
+    return ids;
 }
 
 TEST_CASE("GatorBST Basic Functionality", "[basic]") {
@@ -17,26 +21,29 @@ TEST_CASE("GatorBST Basic Functionality", "[basic]") {
     SECTION("Initial State") {
         REQUIRE(tree.Height() == 0);
         REQUIRE(tree.TraverseInorder().empty());
-        REQUIRE(tree.SearchID(12345678) == std::nullopt);
+        REQUIRE(tree.TraversePreorder().empty());
+        REQUIRE(tree.TraversePostorder().empty());
+        REQUIRE(tree.SearchID(111) == std::nullopt);
     }
 
-    SECTION("Insertion and Search") {
-        REQUIRE(tree.Insert(50, "Root") == true);
-        REQUIRE(tree.Insert(30, "Left") == true);
-        REQUIRE(tree.Insert(70, "Right") == true);
+    SECTION("Insertion and Property Search") {
+        REQUIRE(tree.Insert(50, "RootNode") == true);
+        REQUIRE(tree.Insert(30, "LeftNode") == true);
+        REQUIRE(tree.Insert(70, "RightNode") == true);
         
         auto result = tree.SearchID(30);
         REQUIRE(result.has_value() == true);
-        REQUIRE(result.value() == "Left");
+        REQUIRE(result.value() == "LeftNode");
 
+        // 重复插入必须失败
         REQUIRE(tree.Insert(50, "Duplicate") == false);
-        // 根据 .h，有节点时高度为路径上的节点数（1-based）
         REQUIRE(tree.Height() == 2); 
     }
 }
 
-TEST_CASE("GatorBST Deletion Scenarios", "[remove]") {
+TEST_CASE("GatorBST Complex Deletion Scenarios", "[remove]") {
     GatorBST tree;
+    // 构建标准 BST 结构
     tree.Insert(50, "A");
     tree.Insert(30, "B");
     tree.Insert(70, "C");
@@ -45,93 +52,99 @@ TEST_CASE("GatorBST Deletion Scenarios", "[remove]") {
     tree.Insert(60, "F");
     tree.Insert(80, "G");
 
-    SECTION("Remove leaf node") {
-        REQUIRE(tree.Remove(20) == true);
-        REQUIRE(tree.SearchID(20) == std::nullopt);
+    SECTION("Remove Node with Two Children - Successor Property Check") {
+        // 这是为了抓住那个“只改 ID 不改 Name”或者“指针丢失”的 Mutant
+        // 50 的后继是 60，60 应该带着它原本的 Name "F" 替换上去
+        REQUIRE(tree.Remove(50) == true);
+        
+        // 1. 验证原来的 50 彻底消失
+        REQUIRE(tree.SearchID(50) == std::nullopt);
+        
+        // 2. 验证后继节点 60 的属性依然正确
+        auto res = tree.SearchID(60);
+        REQUIRE(res.has_value());
+        REQUIRE(res.value() == "F"); 
+        
+        // 3. 验证完整的中序序列，确保没有任何节点丢失或位置错误
+        vector<int> expected = {20, 30, 40, 60, 70, 80};
+        REQUIRE(get_ids(tree.TraverseInorder()) == expected);
+        
+        // 4. 验证前序遍历，确保 60 确实变成了新的根节点
+        REQUIRE(tree.TraversePreorder()[0]->ufid == 60);
     }
 
-    SECTION("Remove node with one child") {
-        tree.Remove(20);
-        REQUIRE(tree.Remove(30) == true);
-        REQUIRE(tree.SearchID(40).has_value() == true);
-    }
-
-    SECTION("Mutant Killer: Successor has a right child") {
-        // 这是最容易漏掉的 Mutant：删除有两个孩子的节点，且其后继节点本身有右孩子
+    SECTION("Successor with Right Child Removal") {
+        // 专门测试：后继节点自己还有一个右孩子的情况
         GatorBST t2;
         t2.Insert(50, "Root");
-        t2.Insert(20, "L");
         t2.Insert(80, "R");
-        t2.Insert(60, "R-L");
-        t2.Insert(90, "R-R");
-        t2.Insert(70, "R-L-R"); // 这是 80 的后继节点的右孩子
+        t2.Insert(60, "Successor");
+        t2.Insert(70, "SuccessorRightChild");
         
-        // 删除 50，后继应该是 60
+        // 删除 50，后继 60 应该上位，70 应该挂到 80 的左边
         REQUIRE(t2.Remove(50) == true);
-        auto inorder = t2.TraverseInorder();
-        REQUIRE(inorder.size() == 5);
-        REQUIRE(inorder[2]->ufid == 70); // 确保 70 被正确移位
-        
-        auto preorder = t2.TraversePreorder();
-        REQUIRE(preorder[0]->ufid == 60); // 验证 60 变成了根（或正确的子树顶端）
+        vector<int> expected_in = {60, 70, 80};
+        REQUIRE(get_ids(t2.TraverseInorder()) == expected_in);
+        REQUIRE(t2.Height() == 3); // 确保高度正确更新
     }
 
-    SECTION("Remove Root with only one child") {
-        GatorBST t3;
-        t3.Insert(100, "Root");
-        t3.Insert(50, "LeftChild");
-        REQUIRE(t3.Remove(100) == true);
-        REQUIRE(t3.Height() == 1);
-        REQUIRE(t3.SearchID(50).has_value());
+    SECTION("Remove non-existent and empty") {
+        REQUIRE(tree.Remove(999) == false);
+        // 清空树
+        tree.Remove(30); tree.Remove(70); tree.Remove(20);
+        tree.Remove(40); tree.Remove(60); tree.Remove(80);
+        REQUIRE(tree.Height() == 0);
     }
 }
 
-TEST_CASE("GatorBST Name Search and Traversals", "[advanced]") {
+TEST_CASE("GatorBST SearchName and Order Verification", "[search]") {
     GatorBST tree;
-    // 故意乱序插入同名节点，验证强制排序 Bug
     tree.Insert(300, "Alice");
     tree.Insert(100, "Alice");
     tree.Insert(200, "Alice");
     tree.Insert(50, "Bob");
 
-    SECTION("SearchName Strict Sorting Check") {
-        // 关键：SearchName 必须返回升序 ID 向量 [cite: 30]
+    SECTION("SearchName Strict Sorting") {
+        // 必须按 ID 升序：100, 200, 300
         vector<int> expected = {100, 200, 300};
-        auto result = tree.SearchName("Alice");
-        REQUIRE(result == expected);
-        REQUIRE(is_sorted_ids(result)); 
-        REQUIRE(tree.SearchName("Nobody").empty());
+        REQUIRE(tree.SearchName("Alice") == expected);
+        
+        // 删除中间一个后再查
+        tree.Remove(200);
+        vector<int> expected_after = {100, 300};
+        REQUIRE(tree.SearchName("Alice") == expected_after);
     }
 
-    SECTION("Traversals Detail") {
-        auto inorder = tree.TraverseInorder();
-        REQUIRE(inorder.size() == 4);
-        REQUIRE(inorder[0]->ufid == 50);
-        
-        auto postorder = tree.TraversePostorder();
-        REQUIRE(postorder.size() == 4);
+    SECTION("Postorder Sequence Check") {
+        // 验证后序遍历的精确顺序
+        // 结构：50(Bob) -> 300(Alice) -> 100(Alice) -> 200(Alice)
+        // 这个结构的后序应该是：200, 100, 300, 50
+        auto post_ids = get_ids(tree.TraversePostorder());
+        vector<int> expected_post = {200, 100, 300, 50};
+        REQUIRE(post_ids == expected_post);
     }
 }
 
-TEST_CASE("GatorBST Edge Cases", "[edge]") {
+TEST_CASE("GatorBST Edge Cases and Height", "[edge]") {
     GatorBST tree;
 
-    SECTION("Sequential Insertions and Height") {
-        // 验证非平衡树在顺序插入时高度正确更新
-        for(int i = 1; i <= 5; ++i) {
-            tree.Insert(i, "Student");
-        }
+    SECTION("Left Leaning vs Right Leaning Height") {
+        // 右斜树
+        for(int i = 1; i <= 5; i++) tree.Insert(i, "R");
         REQUIRE(tree.Height() == 5);
-        tree.Remove(5);
-        REQUIRE(tree.Height() == 4);
+        
+        // 左斜树
+        GatorBST treeL;
+        for(int i = 5; i >= 1; i--) treeL.Insert(i, "L");
+        REQUIRE(treeL.Height() == 5);
     }
 
-    SECTION("Removing Root until empty") {
-        tree.Insert(10, "R");
+    SECTION("Root Deletion Scenarios") {
+        // 只有一个左孩子的根
+        tree.Insert(100, "Root");
+        tree.Insert(50, "L");
+        REQUIRE(tree.Remove(100) == true);
         REQUIRE(tree.Height() == 1);
-        REQUIRE(tree.Remove(10) == true);
-        REQUIRE(tree.Height() == 0);
-        REQUIRE(tree.Remove(10) == false);
-        REQUIRE(tree.TraverseInorder().empty());
+        REQUIRE(tree.SearchID(50).has_value());
     }
 }
